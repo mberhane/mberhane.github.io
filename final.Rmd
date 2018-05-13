@@ -1,0 +1,393 @@
+---
+title: "Final Project"
+author: "Michael Berhane"
+date: "May 12, 2018"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(rvest)
+library(tidyverse)
+library(ggplot2)
+library(broom)
+library(randomForest)
+library(caret)
+```
+
+The final project for this course will be a thorough introduction to the data science pipeline. The assignment will be seperated into four sections:  
+1) Data curation, parsing, and management 
+2) Exploratory Data Analysis 
+3) Hypothesis Testing and Machine Learning 
+4) Concluding Messages 
+
+The pipeline will be examined with examples using data from English Premier League, explicitly aggregate data over the course of 20 years, from 1992 to 2012. The data contains statistics for Wins, Losses, Ties, Games Played, Goals For, Goals Against; these statistics will be more than enough for our work.  
+
+The motivation for this pipeline will be to explore the relationship between goals, and points; we will examine the relationship between a strong offense (scoring goals) or strong defense (not conceding goals), and success (earning points through wins or ties). Hopefully, after this project we will be able to quantitatively confirm whether or not defense wins championships!
+
+**Note:** All necessary libraries will be added at the top setup section of the RMarkdown file; however, new libraries will be mentioned when they are used.
+
+
+# Data Curation, Parsing, and Management
+
+
+The first task will be to scrape the data from the web, and create a working data frame. Since the data is on a webpage, instead of a CSV file, it's necessary to read the HTML on the page to locate the field of interest; this can be done by right-clicking on the website in Chrome and selecting Inspect. This task requires use of both the tidyverse and rvest libraries.
+
+```{r Data Scrape}
+url <- "http://www.skysports.com/football/news/11096/7773572/the-20-year-table"
+
+#The read_html command will load the full html data into R. 
+#Upon observing the Inspect document on the webpage, 
+#the table can be found under CSS selector ".arttable"
+
+#Note: https://www.w3.org/TR/CSS2/selector.html contains a 
+#thorough explanation of css selectors.
+
+standings <- url %>% 
+  read_html() %>%
+  html_node(".arttable") %>%
+  #Within the table, select the table body.
+  html_node("tbody")
+
+#The %>% command, as part of the tidyverse library, 
+#allows us to combine multiple commands
+#into one statement. 
+  
+
+standings 
+
+
+```
+
+After the table is retrieved, a significant amount of work is still necessary to form a data frame we are comfortable with. Making a different variable to store each data type is the best way to approach this problem.
+
+
+```{r Retrieve Vars}
+
+rows <- standings %>% html_nodes("tr")
+
+#Each "section" of the row is shown by <td>. Assign each td to a corresponding var.
+#first-of-type finds the first <td> section on each line. nth-of-type(n) finds the nth.
+
+names <- rows %>% html_node("td:first-of-type") %>% html_text()
+names
+
+games <- rows %>% html_node("td:nth-of-type(2)") %>% html_text()
+games
+
+wins <- rows %>% html_node("td:nth-of-type(3)") %>% html_text()
+wins
+
+draws <- rows %>% html_node("td:nth-of-type(4)") %>% html_text()
+draws
+
+losses <- rows %>% html_node("td:nth-of-type(5)") %>% html_text()
+losses
+
+goals_for <- rows %>% html_node("td:nth-of-type(6)") %>% html_text()
+goals_for
+
+goals_against <- rows %>% html_node("td:nth-of-type(7)") %>% html_text()
+goals_against
+
+goal_diff <- rows %>% html_node("td:nth-of-type(8)") %>% html_text()
+goal_diff
+
+points <- rows %>% html_node("td:nth-of-type(9)") %>% html_text()
+points
+
+```
+
+**Note:** If you struggled to follow what we did here, or want to see another example of the process that uses some different functions and methods, *[this page](https://rpubs.com/ryanthomas/webscraping-with-rvest)* also offers a great introduction to scraping using rvest.  
+
+
+Finally, we can create a data frame out of the collection of text lists we just constructed. Data frames and their manipulation are absolutely crucial to properly using R; they are the main way data is stored and evaluated, and will be used throughout the rest of the demonstration.
+
+```{r make data frame}
+epl_df <- data_frame(name = names, games_played = games, wins = wins, draws = draws, 
+                     losses = losses, goals_for = goals_for,
+                     goals_against = goals_against, goal_difference = goal_diff,
+                     points = points)
+
+epl_df
+
+```
+
+There are a couple adjustments we will want to make to the data frame to make it worth evaluating. First, we will want to trim the "name" term to remove the original standing statistic. Then, we will want to change the type of most of the columns; all of the statistics are currently loaded in as text, and will be converted to numeric type. Finally, we will trim some of the teams with very few games played, as their body of work will be too small to properly judge.
+
+```{r clean data frame}
+#To clean the names, use the str_split_fixed function, 
+#and split each name on the period following the number.
+#Then, assign the second value in the matrix to the names variable.
+
+#The mutate command in a data frame allows for the creation 
+#of a new column based on applying a function to each row 
+#in the data frame; this will be used here.
+
+epl_df <- epl_df %>% mutate(name = str_split_fixed(name,  "\\. ", 2)[,2]) %>%
+  #the transform function will now be used to convert 
+  #the character columns into numeric. This can only be used 
+  #when all of the entities in a column are numeric, so be careful.
+  transform(games_played = as.numeric(games_played), wins = as.numeric(wins), 
+            draws = as.numeric(draws), losses = as.numeric(losses), 
+            goals_for = as.numeric(goals_for), goals_against = 
+              as.numeric(goals_against), goal_difference = as.numeric(goal_difference), points = as.numeric(points)) %>%
+  #finally, the filter function will be used to remove teams with less than 300 games played. The filter function applies a boolean statement to every entity, and removes the entities that evaluate to false.
+  filter(games_played >= 300)
+
+epl_df
+
+
+
+
+
+```
+
+
+Now, we have a data frame with 22 teams, all of which have played more than 300 games. All of the numerical data is numeric, and the team names are properly formatted. Additionally, the data is what is considered "tidy": each variable, or attribute, forms a column, and each observation, or entity forms a row. This data is ready to be evaluated and explored.  
+
+## Exploratory Data Analysis
+ In the last section, we were able to transform interesting information we found online into a data frame full of useful and tidy observations. Now, our interest will be in the field of Exploratory Data Analysis; that is, making calculations from single of pairs of data. We will be interested in four properties that can be calculated from our data frame: central trends, spread, skew, and outliers. We will look to both calculate and visualize these traits.  
+ 
+### Adjusting Data
+ 
+ Before moving on, recall that one of our variables in the data frame is "games played", of which most teams have different values. In order to properly measure both of our statistics, it would be useful to convert our statistics into "per game" values. The "mutate" function from earlier will be useful for this: 
+ 
+```{r adjust}
+per_game <- epl_df %>%
+  mutate(
+    wins = (wins / games_played),
+    draws = (draws / games_played),
+    losses = (losses / games_played),
+    goals_for = (goals_for / games_played),
+    goals_against = (goals_against / games_played),
+    goal_difference = (goal_difference / games_played),
+    points = (points / games_played)
+  ) %>%
+  #using the "-" qualifier in select selects all of the attributes besides the one listed
+  select(-games_played)
+
+per_game
+
+
+```
+
+### Central Tendency, Spread, and, Skew
+
+Central Tendency, Spread, and Skew are three properties that, when used together, can appropriately describe the distribution of values in a plot. Central Tendency describes the center of the distribution; typically either the median or mean is used. Spread measures the distance of values on either side of the center; values like variance, standard deviation, and inter-quartile range are appropriate here. Skew measures the offset of the data; this is typically represented by the skew equation, which is the difference between the average distance of the larger values from the mean, and the average distance of the smaller values from the mean. These can all be calculated using R functions and some arithmetic.  
+
+**Note:** If you've never worked with mean or standard deviation, *[this page](https://www.bmj.com/about-bmj/resources-readers/publications/statistics-square-one/2-mean-and-standard-deviation)* provides a great introduction to the algebra happening behind the scenes.  
+
+Let's calculate these values for points per game (PPG) of each team and make observations from it:
+
+```{r mean, spread, skew}
+avg_ppg <- mean(as.matrix(per_game$points))
+avg_ppg
+
+sd_ppg <- sd(per_game$points)
+sd_ppg
+
+#Skew can be (approximately) measured using quartile values: subtract the distance between 
+#the 75th percentile and the median from the distance between the 25th percentile and the mean.
+skew_ppg = (quantile(per_game$points, 3/4) - median(per_game$points)) - (median(per_game$points) - quantile(per_game$points, 1/4))
+skew_ppg
+
+
+
+
+```
+
+**Note:** In the English Premier League, teams earn 3 points for a win, 1 point for a draw, and 0 for a loss.  
+
+This data gives us some helpful information: the average EPL team earns 1.38 points for a win, with a standard deviation of 0.28. This means that a "typical" team earns between 1.1 and 1.66 points per game. The skew is positive, implying that there are more teams with uncharacteristically high PPG values than there are teams with uncharacteristically low.  
+
+
+###Visualizing Data 
+
+In the past section, we calculated a few important distribution properties and made observations based on their values. However, in practice it can be easier to draw these conclusions from a graph. That is where visualizing data becomes important: it simplifies qualitative observations.  
+
+The boxplot ("box and whiskers") is one of the most popular graphs for showing distributions, using the five-number summary: the maximum, the 75th percentile, the median, the 25th percentile, and the minimum. Let's use the "ggplot2" library to make this graph for both goals scored and conceded.
+
+```{r boxplot}
+per_game %>% ggplot(aes(x = '', y = goals_for)) + geom_boxplot()
+
+per_game %>% ggplot(aes(x = '', y = goals_against)) + geom_boxplot()
+
+
+```
+
+**Note:** This is not the last time we'll use ggplot2 in this tutorial. However, if you're curious about what the library is capable of plotting, or wish to plot your data differently from how we have, *[this cheatsheet](https://www.rstudio.com/wp-content/uploads/2015/03/ggplot2-cheatsheet.pdf)* contains everything you'll need to know!  
+
+In the boxplot, the maximum is at the highest point of the plot: values considered to be outliers are shown as points, but in some cases the maximum will simply be the top of the "whisker". The 75th percentile is the top of the box, the median is the line through the box, and the 25th percentile is the bottom of the box. The minimum is the lowest point on the graph.  
+
+What can we conclude from this graph? The boxplots have both an extremely similar central tendency (median) and spread (Inter-Quartile Range - gap between 75th and 25th percentile). These observations suggest that most teams score reasonably close to the same amount of goals as they concede. Goals against has a stronger positive skew than goals for, which appears to be slightly positive at best. This implies that goalscoring across different teams is much more evenly divided on either side of the median than conceding. Later in this project, we will attempt to connect the goal data we just observed, to the points data we observed earlier.  
+
+In this section, we were able to use the data frame we formed to make observations on our data. We calculated then made conclusions using quantitative data such as mean, standard deviation, and skew. Additionally, we showed how to gather qualitative information using a graph. Next, we will use our data and some concepts from the field of statistics to test the correlation between offense, defense, and success in the EPL.  
+
+## Hypothesis Testing and Machine Learning  
+
+In data science, hypothesis testing and machine learning are the most popular ways to analyze the data that we have. For example, it could be valuable to prove the correlation between one variable and another; this can be done using hypothesis testing. Additionally, we could want to predict the value of a variable using other variables; this is a core concept of machine learning. In this tutorial, we will use hypothesis testing to confirm a correlation between both goals scored and points, and goals conceded and points. Then, we will compare the two variable's ability to predict points.  
+
+### Hypothesis Testing  
+
+In hypothesis testing, our goal is typically to prove statistical significance. In this case, we have two hypotheses: there is a relationship between goals scored and points, and there is a relationship between goals conceded and points. In statistics, it is customary to do this by proving the opposite is false: the *null hypothesis*. In this case, we will attempt to "reject" the hypothesis that there is no relationship in either case.  
+
+**Note:** A thorough introduction to the null hypothesis and hypothesis testing, with a greater focus on the statistics behind it, can be found *[here](http://www.statisticshowto.com/probability-and-statistics/hypothesis-testing/)*.  
+
+In order to test our hypothesis, we will regress both goals scored and goals conceded on points. This linear regression will attempt to create an expression $Y = \beta_0 + \beta_1X_0 + \beta_2X_1$, in which Y is points per game, $X_0$ is goals scored per game, and $X_1$ is goals conceded per game. It will calculate the beta values in such a way that Y most closely calculates ppg for varying values of goals scored and conceded. The R function "lm" calculates this:  
+
+```{r linear}
+points_lm <- lm(points~goals_for + goals_against, data = per_game)
+points_lm
+
+#The tidy() command provides clean and helpful information about the model.
+points_stats <- points_lm %>% tidy()
+points_stats
+```
+**Note:** A thorough introduction to the math behind linear regression can be found *[here](https://jeremykun.com/2013/08/18/linear-regression/)*.  
+
+
+Under the statistics window, we can observe the p-value variable for the regression. The p-value is crucial for hypothesis testing: in essence, it shows the likelihood that the correlation we found is due to random chance rather than an actual relationship. In practice, a confidence of 95% is typically accepted; that implies a p-value of less than 0.05. Luckily, our p-values for goals_for and goals_against are both well below that figure, so we can reject the null hypothesis of no relationship.  
+
+The next step is to use the error we found to define a confidence interval. To say that, for example, a team earns .788 ppg more per goal scored would be deceptive; in actuality, we've defined the beta value in the linear model as more of a range. To calculate this range, we must take advantage of the standard error value found above: to have a confidence of 100%, the offset on either side of the calculated value will be twice the standard error. However, for our commonly used confidence of 95%, the following will suffice:  
+
+```{r confidence}
+confidence_for <- 1.95 * points_stats$std.error[2]
+confidence_against <- 1.95 * points_stats$std.error[3]
+
+interval_for <- round(c(points_stats$estimate[2] - confidence_for,
+                               points_stats$estimate[2],
+                               points_stats$estimate[2] + confidence_for), 5)
+interval_for
+
+interval_against <- round(c(points_stats$estimate[3] - confidence_against,
+                               points_stats$estimate[3],
+                               points_stats$estimate[3] + confidence_against), 5)
+
+interval_against
+
+
+```
+
+**Note:** A good video explaining confidence intervals can be found *[here](https://www.khanacademy.org/math/statistics-probability/confidence-intervals-one-sample/estimating-population-proportion/v/confidence-interval-example)*.  
+
+From this information, we can make a formal statement:  
+
+We reject the hypothesis that there is no relationship between goals scored and conceded and points earned; on average, an EPL team earns $_.65648.78810_.91973$ more points per game per goal scored a game, and earns $_.65522.49440_.33357$ *less* points per game per goal conceded a game,    
+
+In this section, we continue to get closer to our goal: we were able to prove that teams that score more goals earn more points, and teams that concede more goals earn less points. This is obvious though! In the last section, we will finally answer the question: which is more accurate in predicting success: offense or defense?  
+
+###Machine Learning  
+
+Machine Learning is a vital application of data science concepts with many real life uses. In machine learning, our goal is to provide the computer with data that we already have, and allow the computer to complete an action on its own, based on the conclusions it makes using the data. In the last section, we provided the computer with our data and parameters, and it produced beta values to minimize loss. This time, our goal will be to provide the computer with data and allow it to predict other values using the information.  
+
+In our case, we are going to create two seperate regression trees: ppg based on goals scored and goals conceded. In a regression tree, the goal is to use the predictor to create a series of boolean statements (partitions), at the end of which is an estimate for the variable we wish to predict. In a random forest, we create a series of slightly different trees to determine the best values for the partitions. To make a random forest, we use the randomForest library.  
+
+Before we can get started, we have to determine how we will measure the accuracy of our predictions. Given a set of data, like ours, we can measure error by setting a certain amount of the data (say, 90%) as "training", and the rest as "testing". We can create a random forest using the training data, then ask it to predict the values of the testing data. By comparing the precision of the two trees in predicting the testing data, we can compare the accuracy of the values. We can execute this method for multiple train and test sets, and aggregate the error rates to find a more fitting error value: this is called k-fold cross validation. This step will use the caret library. 
+
+**Note:** A fresh and unique introduction to the random forest algorithm can be found at this *[medium article](https://medium.com/@Synced/how-random-forest-algorithm-works-in-machine-learning-3c0fe15b6674)*  
+**Note:** Train/Test sets and k-fold cross validation are both explained more thoroughly *[here](https://towardsdatascience.com/train-test-split-and-cross-validation-in-python-80b61beca4b6)*  
+
+```{r k-fold}
+set.seed(4321)
+#We have 22 observations in our data set. Therefore, 11 folds of 2 observations seems appropriate.
+result_df <- createFolds(per_game$points, k = 11) %>%  
+  purrr::imap(function(test_indices, fold_number) {
+    # split into train and test for the fold
+    # for one data set, only provide goals for and points.
+    # for the other, only provide goals against and points.
+    train_for <- per_game %>%
+      select(points, goals_for) %>%
+      slice(-test_indices)
+    
+    train_against <- per_game %>%
+      select(points, goals_against) %>%
+      slice(-test_indices)
+
+    
+    test_for <- per_game %>%
+      select(points, goals_for) %>%
+      slice(test_indices)
+    
+    test_against <- per_game %>%
+      select(points, goals_against) %>%
+      slice(test_indices)
+  
+    # fit the two models
+    rf_for <- randomForest(points~., data=train_for)
+    rf_against <- randomForest(points~., data=train_against)
+   
+    
+    # gather results
+    test_for <- test_for %>%
+      select(observed_label = points) %>%
+      mutate(fold=fold_number) %>%
+      mutate(prediction_for = predict(rf_for, newdata=test_for)) 
+      
+    test_against <- test_against %>% 
+      select(observed_label = points) %>%
+      mutate(fold=fold_number) %>%
+      mutate(prediction_against = predict(rf_against, newdata=test_against))
+    
+    #Use the "merge" function to combine the predictions
+    test <- merge(test_for, test_against)
+}) %>%
+
+purrr::reduce(bind_rows)
+
+result_df
+
+```
+
+Now, we have an estimate and an actual value for each observation in our data set. We can calculate which is more accurate using a concept popular for error: the Total Sum of Squares. By adding together the squared distance between the prediction and observation, then taking the square root, we will find a popular measure of error. Let's find the TSS for each fold.  
+
+```{r error}
+#Recasting the fold variable as a factor will make the grouping function straightforward.
+result_df$fold <- as.factor(result_df$fold)
+
+#Find the squared distance of each prediction from each observation.
+result_df <- result_df %>% 
+  mutate(error_for = (prediction_for - observed_label)^2) %>%
+  mutate(error_against = (prediction_against - observed_label)^2)
+
+#The group_by function allows for future operations to be performed on each group,
+#Instead of the whole data frame.
+
+#The summarize function applies a given function to a column, creating a new data frame.
+tss_for <- result_df %>% group_by(fold) %>%
+  summarize(tss_for = sqrt(sum(error_for))) %>%
+  mutate(method = "for") %>% mutate(error = tss_for) %>%
+  select(-tss_for)
+
+#Use the rbind method to concatenate two data frames
+tss_df <- result_df %>% group_by(fold) %>%
+  summarize(tss_against = sqrt(sum(error_against))) %>%
+  mutate(method = "against") %>% mutate(error = tss_against) %>%
+  select(-tss_against) %>% rbind(tss_for)
+
+tss_df
+
+
+```
+
+**Note:** A good introduction to grouping and summarizing, how we did above, can be found *[here](https://www3.nd.edu/~steve/computing_with_data/24_dplyr/dplyr.html)*  
+
+Now, we have error calculations for each fold, with either method. What we want to know now is if there is a *statistically significant* difference between the two. We can use a concept from earlier, linear regression, to calculate this. Let's regress the error rates on method:  
+
+```{r error regress}
+lm(error~method, data = tss_df) %>% tidy()
+
+
+```
+
+
+With a p-value of .6, we failed to find a statistically significant difference between goals scored and goals conceded as a predictor for points earned; therefore we accept the null hypothesis that defense is a better predictor than offense for success in the EPL. Sadly, we cannot say that defense wins championships!  
+
+## Concluding Notes  
+
+In this report, we were able to start with a question - "does defense win championships?" - and find a quantitative answer using real data. In the first section, we started with a webpage with useful information, and scraped it into a tidy R data frame. In the second section, we were able to make statistical calculations and useful graphs from the data frame. These calculations and graphs were then used to make qualitative observations and statements. In the third section, we attempted to confirm a hypothesis 
+using popular statistical methods, and were able to provide a quantitative statement about the impact of both offense and defense on success in the EPL. Finally, we made and compared two predictive models, hoping but failing to prove that one model was superior to the other. The principles we covered in this report, along with the supplemental readings provided, can be used to create a data science pipeline to solve many different problems!
+
+
